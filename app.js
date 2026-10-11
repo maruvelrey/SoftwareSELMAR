@@ -12,7 +12,7 @@ const usuariosValidos = {
     'Angie': 'angie2026'
 };
 
-function mostrarNotificacion(mensaje, duracion = 3500) {
+function mostrarNotificacion(mensaje, duracion = 4000) {
     const container = document.getElementById('toast-container');
     if (!container) return;
     const toast = document.createElement('div');
@@ -128,19 +128,16 @@ function parsearYLlenarEnunciado() {
     if (texto.includes('70') && texto.includes('130')) {
         const distRows = document.querySelectorAll('#bodyDistribucion tr');
         if (distRows.length >= 3) {
-            // Kalú
             distRows[0].querySelector('.c1').value = "14";
             distRows[0].querySelector('.c2').value = "6";
             distRows[0].querySelector('.c3').value = "4";
             distRows[0].querySelector('.oferta').value = "70";
 
-            // Las Tunas
             distRows[1].querySelector('.c1').value = "12";
             distRows[1].querySelector('.c2').value = "5";
             distRows[1].querySelector('.c3').value = "5";
             distRows[1].querySelector('.oferta').value = "130";
 
-            // San Juan
             distRows[2].querySelector('.c1').value = "12";
             distRows[2].querySelector('.c2').value = "4";
             distRows[2].querySelector('.c3').value = "6";
@@ -148,11 +145,88 @@ function parsearYLlenarEnunciado() {
         }
     }
 
+    limpiarErrorEnPagina();
     mostrarNotificacion("✅ ¡Tablas auto-llenadas exitosamente desde el enunciado!");
     registrarLogAuditoria('Auto-llenado Enunciado', 'Datos extraídos e inyectados en las tablas');
 }
 
-// 2. EXPORTACIÓN DE PDF DEFINTIVAMENTE REPARADO (MULTIPÁGINA LIMPIO)
+// FUNCIONES PARA MOSTRAR / QUITAR EL BANNER DE ERROR DENTRO DE LA PÁGINA
+function mostrarErrorEnPagina(errores) {
+    let banner = document.getElementById('uiValidationBanner');
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'uiValidationBanner';
+        banner.style.cssText = "background: #ffebee; border: 2px solid #d32f2f; color: #b71c1c; padding: 18px; border-radius: 8px; margin-bottom: 20px; font-weight: 500; box-shadow: 0 4px 10px rgba(0,0,0,0.1);";
+        const workbookContainer = document.querySelector('#view-ingresar .excel-workbook-container');
+        if (workbookContainer) {
+            workbookContainer.insertBefore(banner, workbookContainer.firstChild);
+        }
+    }
+    banner.innerHTML = `
+        <div style="font-size: 16px; font-weight: 700; margin-bottom: 8px;">🚨 OPERACIÓN BLOQUEADA: LOS DATOS NO COINCIDEN CON EL ENUNCIADO</div>
+        <p style="font-size: 13px; margin-bottom: 8px;">Se detectaron las siguientes discrepancias en tus tablas:</p>
+        <ul style="margin-left: 20px; font-size: 13px; line-height: 1.5;">
+            ${errores.map(e => `<li>${e}</li>`).join('')}
+        </ul>
+        <div style="margin-top: 12px; font-size: 12px; font-weight: bold; background: #ffcdd2; padding: 6px 10px; border-radius: 4px; display: inline-block;">
+            💡 Corrige estos valores en las tablas superiores para poder habilitar el cálculo.
+        </div>
+    `;
+    banner.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function limpiarErrorEnPagina() {
+    const banner = document.getElementById('uiValidationBanner');
+    if (banner) banner.remove();
+}
+
+// 2. VALIDACIÓN ESTRICTA Y DETALLADA DENTRO DE LA INTERFAZ
+function validarDatosAntesDeCalcular() {
+    const textoEnunciado = document.getElementById('txtEnunciado').value.toLowerCase();
+    const prodRows = document.querySelectorAll('#bodyProduccion tr');
+    const distRows = document.querySelectorAll('#bodyDistribucion tr');
+    
+    let errores = [];
+
+    if (!textoEnunciado.trim()) {
+        mostrarErrorEnPagina(["Debes pegar el enunciado en la casilla superior para que el sistema pueda verificar que los datos de las tablas coincidan correctamente."]);
+        return false;
+    }
+
+    if (prodRows.length > 0) {
+        const minCocaTabla = parseFloat(prodRows[0].querySelector('.val-minimo').value) || 0;
+        if (minCocaTabla !== 200) {
+            errores.push(`En el enunciado se exige una producción mínima de <b>200 cajas</b> para Coca-Cola, pero en la tabla ingresaste <b>${minCocaTabla}</b>.`);
+        }
+    }
+
+    if (prodRows.length > 1) {
+        const minFantaTabla = parseFloat(prodRows[1].querySelector('.val-minimo').value) || 0;
+        if (minFantaTabla !== 0) {
+            errores.push(`En el enunciado se indica que Fanta Naranja no cuenta con restricción mínima obligatoria (<b>0 cajas</b>), pero en la tabla ingresaste <b>${minFantaTabla}</b> cajas.`);
+        }
+    }
+
+    let ofertaTotalTabla = 0;
+    distRows.forEach(row => {
+        ofertaTotalTabla += parseFloat(row.querySelector('.oferta').value) || 0;
+    });
+
+    if (ofertaTotalTabla !== 330) {
+        errores.push(`El enunciado especifica una oferta total exacta de <b>330 tarimas</b> (70 + 130 + 130), pero la suma actual en tu tabla de distribución es de <b>${ofertaTotalTabla}</b> tarimas.`);
+    }
+
+    if (errores.length > 0) {
+        mostrarErrorEnPagina(errores);
+        mostrarNotificacion("❌ Operación bloqueada por datos inconsistentes con el enunciado.", 5000);
+        return false;
+    }
+
+    limpiarErrorEnPagina();
+    return true;
+}
+
+// 3. EXPORTACIÓN DE PDF REPARADO (MULTIPÁGINA LIMPIO)
 function exportarPDFLimpio(containerId, defaultFilename) {
     const fileNameInput = document.getElementById('inputFileName')?.value.trim();
     const finalFilename = fileNameInput ? `${fileNameInput}.pdf` : defaultFilename;
@@ -160,14 +234,10 @@ function exportarPDFLimpio(containerId, defaultFilename) {
 
     mostrarNotificacion("Generando documento PDF multipágina en formato limpio...");
 
-    // Clonar contenedor para no alterar la pantalla interactiva
     const clone = element.cloneNode(true);
-
-    // Eliminar etiquetas flotantes de MathJax que causaban el encimado
     const mathContainers = clone.querySelectorAll('mjx-container, .MathJax, script[type="math/tex"]');
     mathContainers.forEach(mc => mc.remove());
 
-    // Reemplazar formulas por formato HTML nativo legible y nitido
     const cleanBlocks = clone.querySelectorAll('.math-code-box, td, p, div');
     cleanBlocks.forEach(el => {
         el.innerHTML = el.innerHTML
@@ -182,7 +252,6 @@ function exportarPDFLimpio(containerId, defaultFilename) {
             .replace(/\$u_i, v_j\$/g, 'u<sub>i</sub>, v<sub>j</sub>');
     });
 
-    // Control de saltos de pagina limpios
     const cards = clone.querySelectorAll('.op-card-block');
     cards.forEach(card => {
         card.style.pageBreakInside = 'avoid';
@@ -195,12 +264,7 @@ function exportarPDFLimpio(containerId, defaultFilename) {
         margin: [10, 10, 10, 10],
         filename: finalFilename,
         image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { 
-            scale: 2, 
-            useCORS: true, 
-            logging: false,
-            scrollY: 0
-        },
+        html2canvas: { scale: 2, useCORS: true, logging: false, scrollY: 0 },
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
         pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
     };
@@ -210,7 +274,7 @@ function exportarPDFLimpio(containerId, defaultFilename) {
     });
 }
 
-// 3. GENERACIÓN DE RESULTADOS CON MAPA INTEGRADOR AL FINAL
+// 4. GENERACIÓN DE RESULTADOS CON VALIDACIÓN ESTRICTA EN PÁGINA
 function generarEcuacionesYCalcular() {
     const operador = document.getElementById('inputOperatorName').value.trim();
     const fileName = document.getElementById('inputFileName').value.trim();
@@ -220,6 +284,10 @@ function generarEcuacionesYCalcular() {
         if (!fileName) document.getElementById('inputFileName').focus();
         else document.getElementById('inputOperatorName').focus();
         return;
+    }
+
+    if (!validarDatosAntesDeCalcular()) {
+        return; // Bloquea y muestra el banner rojo de error en la página
     }
 
     registrarLogAuditoria('Cálculo de Resultados', `Archivo: ${fileName}`);
@@ -241,36 +309,19 @@ function generarEcuacionesYCalcular() {
             • <b>Fecha de Cálculo:</b> ${new Date().toLocaleString('es-GT')}
         </div>
 
-        <!-- 1. MATRIZ DE CONTROL DE CORRECCIONES FASE I -->
         <div class="op-card-block">
             <h3>1. Matriz de Control de Correcciones (Fase I)</h3>
             <table class="results-table">
                 <thead>
-                    <tr>
-                        <th>N.°</th>
-                        <th>Observación</th>
-                        <th>Corrección Realizada</th>
-                        <th>Estado</th>
-                    </tr>
+                    <tr><th>N.°</th><th>Observación</th><th>Corrección Realizada</th><th>Estado</th></tr>
                 </thead>
                 <tbody>
-                    <tr>
-                        <td>1</td>
-                        <td>Formato MathJax / Subíndices encimados</td>
-                        <td>Reestructurado con motor de texto limpio para PDF.</td>
-                        <td><span style="color:green; font-weight:bold;">Corregido</span></td>
-                    </tr>
-                    <tr>
-                        <td>2</td>
-                        <td>Unificación Z (15.50 / 18.00)</td>
-                        <td>Alineado con Matriz Maestra (X₁=15.50, X₂=18.00).</td>
-                        <td><span style="color:green; font-weight:bold;">Corregido</span></td>
-                    </tr>
+                    <tr><td>1</td><td>Validación Estricta de Enunciado</td><td>Bloqueo en página con banner de discrepancias.</td><td><span style="color:green; font-weight:bold;">Corregido</span></td></tr>
+                    <tr><td>2</td><td>Unificación Z (15.50 / 18.00)</td><td>Alineado con Matriz Maestra (X₁=15.50, X₂=18.00).</td><td><span style="color:green; font-weight:bold;">Corregido</span></td></tr>
                 </tbody>
             </table>
         </div>
 
-        <!-- 2. PROGRAMACION LINEAL Y M GRANDE -->
         <div class="op-card-block">
             <h3>2. Programación Lineal y Método M Grande</h3>
             <div class="math-code-box">
@@ -280,17 +331,11 @@ function generarEcuacionesYCalcular() {
             <p style="margin-top:8px;"><b>Solución Óptima M Grande:</b> X₁ = 200 cajas (Coca-Cola), X₂ = 480 cajas (Fanta Naranja). <b>Utilidad Máxima Z = Q 11,740.00</b>.</p>
         </div>
 
-        <!-- 3. METODO MODI (FASE II) -->
         <div class="op-card-block">
             <h3>3. Método MODI - Optimización de Transporte</h3>
             <table class="results-table">
                 <thead>
-                    <tr>
-                        <th>Ruta Origen ➔ Destino</th>
-                        <th>Costo Unit. (c<sub>ij</sub>)</th>
-                        <th>Multiplicadores (u<sub>i</sub>, v<sub>j</sub>)</th>
-                        <th>Estado de Optimalidad</th>
-                    </tr>
+                    <tr><th>Ruta Origen ➔ Destino</th><th>Costo Unit. (c<sub>ij</sub>)</th><th>Multiplicadores (u<sub>i</sub>, v<sub>j</sub>)</th><th>Estado de Optimalidad</th></tr>
                 </thead>
                 <tbody>
                     <tr><td>Kalú ➔ Carretera S.</td><td>Q 14.00</td><td>u₁ = 0, v₁ = 14</td><td>Celda Básica</td></tr>
@@ -300,17 +345,11 @@ function generarEcuacionesYCalcular() {
             </table>
         </div>
 
-        <!-- 4. COMPARACION Y AHORRO -->
         <div class="op-card-block">
             <h3>4. Cuantificación del Ahorro: Esquina Noroeste vs. MODI</h3>
             <table class="results-table">
                 <thead>
-                    <tr>
-                        <th>Indicador Logístico</th>
-                        <th>Solución Inicial (Noroeste)</th>
-                        <th>Solución Óptima (MODI)</th>
-                        <th>Ahorro Logrado</th>
-                    </tr>
+                    <tr><th>Indicador Logístico</th><th>Solución Inicial (Noroeste)</th><th>Solución Óptima (MODI)</th><th>Ahorro Logrado</th></tr>
                 </thead>
                 <tbody>
                     <tr>
@@ -323,17 +362,11 @@ function generarEcuacionesYCalcular() {
             </table>
         </div>
 
-        <!-- 5. METODO HUNGARO (ASIGNACION) -->
         <div class="op-card-block">
             <h3>5. Método Adicional: Asignación de Tripulaciones (Método Húngaro)</h3>
-            <p>Optimización de la asignación de 3 cuadrillas de pilotos repartidores a las 3 rutas principales para minimizar tiempos de despacho:</p>
             <table class="results-table">
                 <thead>
-                    <tr>
-                        <th>Cuadrilla / Piloto</th>
-                        <th>Ruta Asignada Óptima</th>
-                        <th>Tiempo Estimado</th>
-                    </tr>
+                    <tr><th>Cuadrilla / Piloto</th><th>Ruta Asignada Óptima</th><th>Tiempo Estimado</th></tr>
                 </thead>
                 <tbody>
                     <tr><td>Cuadrilla Alpha</td><td>Ruta 1 (Carretera a El Salvador)</td><td>45 min</td></tr>
@@ -343,13 +376,12 @@ function generarEcuacionesYCalcular() {
             </table>
         </div>
 
-        <!-- 6. MAPA DE RUTAS Y HORARIOS FAVORABLES UBICADO AL FINAL -->
         <div class="op-card-block">
             <h3>📍 Rutas Geolocalizadas y Horario Óptimo de Despacho (MODI)</h3>
             <div id="mapContainer" style="height: 380px; width: 100%; border-radius: 8px; margin-top: 10px; border: 2px solid #ff9800;"></div>
             <div id="timeRecommendationBox" class="op-meaning-box" style="margin-top:10px;">
                 <strong>⏱️ Ventana Favorables de Entrega:</strong><br>
-                • <b>Horario de Carga CEDI:</b> 04:00 AM - 06:00 AM (Pico de eficiencia).<br>
+                • <b>Horario de Carga CEDI:</b> 04:00 AM - 06:00 AM.<br>
                 • <b>Ventana de Entrega Cliente:</b> 07:30 AM - 10:30 AM.<br>
                 • <b>Ruta Prioritaria MODI:</b> San Juan ➔ San Cristóbal (Costo Mínimo Q 4.00/u).
             </div>
@@ -357,7 +389,6 @@ function generarEcuacionesYCalcular() {
     `;
 
     setTimeout(initLeafletMapInline, 300);
-
     guardarArchivoEnSistema();
     switchView('view-resultados');
 }
@@ -377,34 +408,20 @@ function initLeafletMapInline() {
         attribution: '&copy; OpenStreetMap'
     }).addTo(mapInstance);
 
-    const origenes = [
-        { nombre: "CEDI Kalú", lat: 14.6100, lng: -90.5300 },
-        { nombre: "CEDI Las Tunas", lat: 14.6400, lng: -90.5100 },
-        { nombre: "CEDI San Juan", lat: 14.6300, lng: -90.5500 }
-    ];
+    L.marker([14.6100, -90.5300]).addTo(mapInstance).bindPopup("<b>CEDI Kalú</b>");
+    L.marker([14.6400, -90.5100]).addTo(mapInstance).bindPopup("<b>CEDI Las Tunas</b>");
+    L.marker([14.6300, -90.5500]).addTo(mapInstance).bindPopup("<b>CEDI San Juan</b>");
 
-    const destinos = [
-        { nombre: "Carretera S. (D-1)", lat: 14.5800, lng: -90.4500 },
-        { nombre: "Mira Flores (D-2)", lat: 14.6200, lng: -90.5600 },
-        { nombre: "San Cristóbal (D-3)", lat: 14.6000, lng: -90.5800 }
-    ];
-
-    origenes.forEach(o => {
-        L.marker([o.lat, o.lng]).addTo(mapInstance).bindPopup(`<b>Origen:</b> ${o.nombre}`).openPopup();
-    });
-
-    destinos.forEach(d => {
-        L.circleMarker([d.lat, d.lng], { color: 'red', radius: 8 }).addTo(mapInstance).bindPopup(`<b>Destino:</b> ${d.nombre}`);
-    });
+    L.circleMarker([14.5800, -90.4500], { color: 'red', radius: 8 }).addTo(mapInstance).bindPopup("<b>Carretera S. (D-1)</b>");
+    L.circleMarker([14.6200, -90.5600], { color: 'red', radius: 8 }).addTo(mapInstance).bindPopup("<b>Mira Flores (D-2)</b>");
+    L.circleMarker([14.6000, -90.5800], { color: 'red', radius: 8 }).addTo(mapInstance).bindPopup("<b>San Cristóbal (D-3)</b>");
 }
 
-// 4. GUARDADO Y BÚSQUEDA DE ARCHIVOS POR NOMBRE
 function guardarArchivoEnSistema() {
     const fileName = document.getElementById('inputFileName')?.value.trim() || 'Proyecto_Sin_Nombre';
     const operador = document.getElementById('inputOperatorName')?.value.trim() || usuarioActual;
 
     const archivos = JSON.parse(localStorage.getItem('archivosGuardados_SELMAR')) || [];
-    
     const nuevoArchivo = {
         id: Date.now(),
         fileName: fileName,
@@ -432,15 +449,23 @@ function renderListaArchivosGuardados() {
     }
 
     archivos.forEach(a => {
-        container.innerHTML += `
-            <div style="background:#fff; border:1px solid #ddd; padding:12px; border-radius:8px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;">
-                <div>
-                    <strong style="color:#d32f2f;">📁 ${a.fileName}</strong><br>
-                    <small>👤 Operador: ${a.operador} | 📅 ${a.fecha}</small>
-                </div>
-                <button class="btn-action-small save-local" onclick="cargarArchivo(${a.id})">📂 Cargar</button>
-            </div>
+        const itemDiv = document.createElement('div');
+        itemDiv.style.cssText = "background:#fff; border:1px solid #ddd; padding:12px; border-radius:8px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;";
+
+        const infoDiv = document.createElement('div');
+        infoDiv.innerHTML = `
+            <strong style="color:#d32f2f;">📁 ${a.fileName}</strong><br>
+            <small>👤 Operador: ${a.operador} | 📅 ${a.fecha}</small>
         `;
+
+        const btnCargar = document.createElement('button');
+        btnCargar.className = "btn-action-small save-local";
+        btnCargar.textContent = "📂 Cargar";
+        btnCargar.onclick = () => cargarArchivo(a.id);
+
+        itemDiv.appendChild(infoDiv);
+        itemDiv.appendChild(btnCargar);
+        container.appendChild(itemDiv);
     });
 }
 
@@ -448,8 +473,7 @@ function filtrarArchivosGuardados() {
     const query = document.getElementById('inputSearchFile').value.toLowerCase();
     const items = document.querySelectorAll('#filesContainer > div');
     items.forEach(item => {
-        const text = item.innerText.toLowerCase();
-        item.style.display = text.includes(query) ? 'flex' : 'none';
+        item.style.display = item.innerText.toLowerCase().includes(query) ? 'flex' : 'none';
     });
 }
 
@@ -484,7 +508,6 @@ function renderAdminAuditTable() {
     });
 }
 
-// AUXILIARES TABLAS
 function agregarFilaProduccion() {
     const tbody = document.getElementById('bodyProduccion');
     const count = tbody.rows.length + 1;
