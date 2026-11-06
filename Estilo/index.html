@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema Integrado IO - Distribuidora SELMAR S.A.</title>
+    <!-- Fuente Poppins -->
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <link rel="stylesheet" href="styles.css">
+    <!-- Vis-Network para Grafos y Chart.js para GeoGebra -->
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body class="bg-corporate">
+
+    <div id="toast-container"></div>
+
+    <!-- VISTA 1: LOGIN CENTRADO ABSOLUTO -->
+    <div id="view-login" class="view-screen active login-wrapper">
+        <div class="login-card-container">
+            <div class="login-left-panel">
+                <img src="../Assets/cocacolalogging.png" alt="Logo" style="width: 100px; margin-bottom: 15px;" onerror="this.style.display='none'">
+                <h3>SELMAR S.A. IO</h3>
+                <p style="font-size: 13px; opacity: 0.9;">Universidad Panamericana (UPANA)</p>
+            </div>
+            <div class="login-right-panel">
+                <h2>Sistema Integrado IO</h2>
+                <div>
+                    <div class="form-group">
+                        <label>Usuario:</label>
+                        <input type="text" id="usuario" placeholder="Ej. Mariana">
+                    </div>
+                    <div class="form-group">
+                        <label>Contraseña:</label>
+                        <input type="password" id="password" placeholder="Contraseña">
+                    </div>
+                    <button type="button" class="btn-primary" onclick="intentarLogin()">Iniciar Sesión</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- VISTA 2: DASHBOARD PRINCIPAL CON BARRA DISCRETA -->
+    <div id="appDashboard" class="dashboard-layout" style="display:none;">
+        <aside class="sidebar-discreet">
+            <div class="sidebar-brand">
+                <span class="brand-icon">🥤</span>
+                <span class="brand-text">SELMAR S.A.</span>
+            </div>
+            <div id="userBadge" class="user-badge">Mariana [ADMIN]</div>
+            <ul class="sidebar-menu">
+                <li onclick="switchView('view-menu')">
+                    <span class="icon">🏠</span>
+                    <span class="label">Inicio</span>
+                </li>
+                <li onclick="switchView('view-ingresar')">
+                    <span class="icon">📝</span>
+                    <span class="label">Parámetros & Enunciado</span>
+                </li>
+                <li onclick="switchView('view-resultados')">
+                    <span class="icon">📊</span>
+                    <span class="label">Resultados y Procedimientos</span>
+                </li>
+                <li onclick="switchView('view-buscar')">
+                    <span class="icon">🔍</span>
+                    <span class="label">Buscar / Modificar Archivos</span>
+                </li>
+                <li id="menuAdminOnly" style="display:none;" onclick="switchView('view-admin')">
+                    <span class="icon">🛡️</span>
+                    <span class="label">Panel Admin (Auditoría)</span>
+                </li>
+                <li onclick="cerrarSesion()" class="logout-item">
+                    <span class="icon">🚪</span>
+                    <span class="label">Cerrar Sesión</span>
+                </li>
+            </ul>
+        </aside>
+
+        <main class="main-content">
+            <!-- Pestaña 1: Inicio Centrado -->
+            <div id="view-menu" class="view-screen active">
+                <div class="center-content-wrapper">
+                    <div class="hero-card">
+                        <h1>Panel de Control - Fase III</h1>
+                        <p>Simulador integrado de Investigación de Operaciones con procedimientos matemáticos detallados paso a paso (Ing. Estela Xiloj / UPANA).</p>
+                        <div class="hero-actions">
+                            <button class="btn-primary" onclick="switchView('view-ingresar')">📝 Ingresar / Llenar Enunciado</button>
+                            <button class="btn-primary" onclick="switchView('view-buscar')">🔍 Buscar y Modificar Archivos</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Pestaña 2: Parámetros y Enunciado -->
+            <div id="view-ingresar" class="view-screen">
+                <div class="card-section">
+                    <h2 class="section-title">Parámetros y Enunciado (Fase III)</h2>
+                    
+                    <div class="form-group">
+                        <label>Nombre del Archivo / Proyecto (Para guardar y modificar):</label>
+                        <input type="text" id="inputFileName" value="Caso_Fase3_SELMAR" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Responsable del Registro:</label>
+                        <input type="text" id="inputOperatorName" value="Mariana Velasquez" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="txtEnunciado">Enunciado del problema:</label>
+                        <textarea id="txtEnunciado" rows="5" placeholder="Pega el enunciado completo, incluyendo tablas, datos, unidades y restricciones..."></textarea>
+                        <small style="display:block; margin-top:6px; color:#666;">El analisis se ejecuta en este navegador; no necesita clave ni envia el enunciado a un servicio externo. El parser busca formulas, nombres y expresiones habituales. Revisa los datos detectados y completa la redaccion si falta informacion.</small>
+                        <button id="parseStatementButton" class="btn-action-small" style="margin-top: 8px;" onclick="parsearYLlenarEnunciado()">🔎 Analizar enunciado localmente</button>
+                        <div id="localExtractionSummary" aria-live="polite" style="margin-top:12px;"></div>
+                    </div>
+
+                    <!-- Hoja 1: Producción -->
+                    <h3 class="sub-title">Hoja 1: Producción y Recursos</h3>
+                    <table class="excel-table">
+                        <thead>
+                            <tr><th>#</th><th>Producto</th><th>Utilidad / objetivo</th><th>Mínimo</th></tr>
+                        </thead>
+                        <tbody id="bodyProduccion">
+                            <tr><td colspan="4">Los productos y restricciones aparecerán aquí después del análisis.</td></tr>
+                        </tbody>
+                    </table>
+                    <table class="excel-table" style="margin-top:10px;">
+                        <thead><tr><th>Restricción</th><th>Coeficientes (orden de productos)</th><th>Operador</th><th>Lado derecho</th></tr></thead>
+                        <tbody id="bodyProductionConstraints">
+                            <tr><td colspan="4">Las restricciones aparecerán aquí después del análisis.</td></tr>
+                        </tbody>
+                    </table>
+
+                    <!-- Hoja 2: Distribución -->
+                    <h3 class="sub-title" style="margin-top: 25px;">Hoja 2: Red de Distribución (Transporte)</h3>
+                    <table class="excel-table">
+                        <thead>
+                            <tr><th>Origen</th><th>Destinos y costos unitarios</th><th>Oferta</th></tr>
+                        </thead>
+                        <tbody id="bodyDistribucion">
+                            <tr><td colspan="3">Los orígenes, destinos y costos aparecerán aquí después del análisis.</td></tr>
+                        </tbody>
+                        <tfoot id="footerDistribucion"></tfoot>
+                    </table>
+
+                    <div class="action-buttons-row">
+                        <button class="btn-save" onclick="guardarProyectoEnMemoria()">💾 Guardar Archivo</button>
+                        <button class="btn-calculate" onclick="generarEcuacionesYCalcular()">🚀 Resolver Todo y Ver Procedimientos</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Pestaña 3: Resultados (Independiente) -->
+            <div id="view-resultados" class="view-screen">
+                <div class="card-section">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 2px solid #f0f0f0; padding-bottom: 10px;">
+                        <h2 class="section-title" style="margin-bottom: 0; border: none;">Resultados y Procedimientos Matemáticos Detallados</h2>
+                        <button class="btn-save" onclick="exportarPDF()" style="padding: 8px 16px; font-size: 13px; width: auto; cursor: pointer;">📥 Guardar en PDF</button>
+                    </div>
+                    <div id="resultsOutputContainer" style="margin-top: 15px; width: 100%;"></div>
+                </div>
+            </div>
+
+            <!-- Pestaña 4: Buscar y Modificar Archivos -->
+            <div id="view-buscar" class="view-screen">
+                <div class="card-section">
+                    <h2 class="section-title">Buscar y Modificar Archivos Guardados</h2>
+                    <div class="form-group">
+                        <label>Filtrar por nombre de archivo o responsable:</label>
+                        <input type="text" id="inputSearchQuery" placeholder="Escriba para buscar..." oninput="filtrarArchivosGuardados()">
+                    </div>
+                    <div id="searchFilesResultContainer" style="margin-top: 20px;">
+                        <p style="color: #666;">No hay registros de archivos almacenados en la sesión actual.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Pestaña 5: Panel Admin -->
+            <div id="view-admin" class="view-screen">
+                <div class="card-section">
+                    <h2 class="section-title">Panel de Auditoría y Control Multi-Dispositivo</h2>
+                    <table class="excel-table" style="margin-top: 15px; text-align: left;">
+                        <thead>
+                            <tr>
+                                <th style="padding: 12px;">Fecha / Hora</th>
+                                <th style="padding: 12px;">Usuario (Rol)</th>
+                                <th style="padding: 12px;">Operador</th>
+                                <th style="padding: 12px;">Dispositivo</th>
+                                <th style="padding: 12px;">Acción</th>
+                                <th style="padding: 12px;">Detalle</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adminAuditTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="../Logica/config.js"></script>
+    <script src="../Logica/local-parser.js"></script>
+    <script src="../Logica/io-models.js"></script>
+    <script src="../Logica/app.js"></script>
+</body>
+</html>
