@@ -540,6 +540,15 @@ function generarEcuacionesYCalcular() {
         - <b>Fecha:</b> ${escaparHtml(new Date().toLocaleString('es-GT'))}
     </div>`);
 
+    const objetivosDisponibles = estados.filter(estado => estado.disponible)
+        .map(estado => `<li>Analizar ${escaparHtml(estado.tema)} con los datos reconocidos en el enunciado, mostrando el procedimiento y sus resultados.</li>`)
+        .join('');
+    partes.push(seccion('detIntroduccion', 'Introducción, objetivos e interpretación general',
+        `<p>Este reporte presenta el analisis cuantitativo del proyecto a partir de los datos detectados en el enunciado. Los resultados no completan tasas, costos ni duraciones ausentes con valores de ejemplo.</p>
+        <p><b>Objetivo general:</b> evaluar los modelos de investigacion de operaciones aplicables al caso y sustentar las decisiones con sus formulas y datos.</p>
+        <p><b>Objetivos especificos:</b></p><ul>${objetivosDisponibles}</ul>
+        <p><b>Interpretacion:</b> las conclusiones son validas bajo los supuestos de cada modelo; verifica que las entradas detectadas y sus unidades correspondan al caso real.</p>`));
+
     const pl = porNombre('Programacion lineal');
     partes.push(seccion('detMGrande', 'Programacion Lineal, Simplex y plano 2D',
         contenidoTema(pl, () => obtenerProcedimientoMGrande())));
@@ -559,6 +568,10 @@ function generarEcuacionesYCalcular() {
     const pert = porNombre('PERT / CPM');
     partes.push(seccion('detPert', 'Analisis PERT / CPM',
         contenidoTema(pert, () => obtenerProcedimientoPertCpm())));
+
+    const colas = porNombre('Teoria de colas');
+    partes.push(seccion('detColas', 'Teoria de colas por servicio o destino',
+        contenidoTema(colas, () => obtenerProcedimientoColas())));
 
     if (extraction.avisos.length) {
         partes.push(`<div class="procedure-step" style="background:#fff3e0;padding:14px;border-radius:8px;"><b>Observaciones de extraccion:</b><ul>${extraction.avisos.map(aviso => `<li>${escaparHtml(aviso)}</li>`).join('')}</ul></div>`);

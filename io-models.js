@@ -6,8 +6,8 @@
      tablas, operaciones, verificación y conclusión).
    - La interfaz solo resuelve modelos completos extraídos del enunciado.
      Los motores reciben window.datosProduccion, datosTransporte,
-     datosAsignacion y datosPert; los datos incompletos generan un error y
-     nunca se sustituyen por ejemplos predeterminados.
+     datosAsignacion, datosPert y datosColas; los datos incompletos generan
+     un error y nunca se sustituyen por ejemplos predeterminados.
    ========================================================================== */
 
 const EPS = 1e-9;
@@ -981,7 +981,277 @@ function obtenerProcedimientoHungaro() {
 }
 
 /* ==========================================================================
-   7. PERT / CPM (pasada hacia adelante y hacia atrás, SIN decimales)
+   7. TEORÍA DE COLAS M/M/c
+   ========================================================================== */
+
+function leerDatosColas() {
+    const servicios = window.datosColas;
+    if (!Array.isArray(servicios) || !servicios.length) {
+        FUENTES.colas = 'SIN DATOS';
+        throw new Error('No hay servicios de colas completos extraídos del enunciado.');
+    }
+    FUENTES.colas = 'enunciado (tasas por servicio)';
+    return servicios;
+}
+
+function escaparColaHtml(valor) {
+    return String(valor).replace(/[&<>"']/g, caracter => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[caracter]);
+}
+
+function semillaCola(servicio) {
+    const texto = `${servicio.nombre}|${servicio.lambda}|${servicio.mu}|${servicio.servidores}`;
+    let semilla = 2166136261;
+    for (let i = 0; i < texto.length; i++) {
+        semilla ^= texto.charCodeAt(i);
+        semilla = Math.imul(semilla, 16777619);
+    }
+    return semilla >>> 0 || 1;
+}
+
+function simularColaMMc(servicio, cantidad = 30000) {
+    let estado = semillaCola(servicio);
+    const aleatorio = () => {
+        estado = (Math.imul(1664525, estado) + 1013904223) >>> 0;
+        return (estado + 1) / 4294967297;
+    };
+    const disponibles = Array(servicio.servidores).fill(0);
+    let llegada = 0, sumaEspera = 0, sumaSistema = 0;
+    const intervalosServicio = [], intervalosSistema = [];
+    for (let i = 0; i < cantidad; i++) {
+        llegada += -Math.log(aleatorio()) / servicio.lambda;
+        let servidor = 0;
+        for (let j = 1; j < disponibles.length; j++) {
+            if (disponibles[j] < disponibles[servidor]) servidor = j;
+        }
+        const inicio = Math.max(llegada, disponibles[servidor]);
+        const espera = inicio - llegada;
+        const atencion = -Math.log(aleatorio()) / servicio.mu;
+        const salida = inicio + atencion;
+        disponibles[servidor] = salida;
+        sumaEspera += espera;
+        sumaSistema += espera + atencion;
+        intervalosServicio.push([inicio, salida]);
+        intervalosSistema.push([llegada, salida]);
+    }
+    const lambdaObservada = cantidad / llegada;
+    const trabajoObservado = intervalosServicio.reduce((total, [inicio, salida]) =>
+        total + Math.max(0, Math.min(salida, llegada) - inicio), 0);
+    let inicioOcupado = null, finOcupado = 0, tiempoOcupado = 0;
+    intervalosSistema.forEach(([inicio, salida]) => {
+        if (inicioOcupado === null) {
+            inicioOcupado = inicio;
+            finOcupado = salida;
+        } else if (inicio > finOcupado) {
+            tiempoOcupado += Math.max(0, Math.min(finOcupado, llegada) - inicioOcupado);
+            inicioOcupado = inicio;
+            finOcupado = salida;
+        } else {
+            finOcupado = Math.max(finOcupado, salida);
+        }
+    });
+    if (inicioOcupado !== null) {
+        tiempoOcupado += Math.max(0, Math.min(finOcupado, llegada) - inicioOcupado);
+    }
+    return {
+        lambda: lambdaObservada,
+        p0: 1 - tiempoOcupado / llegada,
+        Wq: sumaEspera / cantidad,
+        W: sumaSistema / cantidad,
+        Lq: lambdaObservada * sumaEspera / cantidad,
+        L: lambdaObservada * sumaSistema / cantidad,
+        rho: trabajoObservado / (servicio.servidores * llegada)
+    };
+}
+
+function resolverColaMMc(servicio, incluirSimulacion = true) {
+    const { lambda, mu, servidores: c } = servicio;
+    const a = lambda / mu;
+    const rho = lambda / (c * mu);
+    if (lambda >= c * mu) {
+        return { estable: false, rho, a, manual: null, simulacion: incluirSimulacion ? simularColaMMc(servicio) : null };
+    }
+    let suma = 0, termino = 1;
+    for (let n = 0; n < c; n++) {
+        if (n > 0) termino *= a / n;
+        suma += termino;
+    }
+    let factorial = 1;
+    for (let n = 2; n <= c; n++) factorial *= n;
+    const p0 = 1 / (suma + (Math.pow(a, c) / (factorial * (1 - rho))));
+    const Lq = p0 * Math.pow(a, c) * rho / (factorial * Math.pow(1 - rho, 2));
+    const Wq = Lq / lambda;
+    const W = Wq + 1 / mu;
+    const manual = { rho, p0, Lq, Wq, W, L: lambda * W };
+    return { estable: true, rho, a, manual, simulacion: incluirSimulacion ? simularColaMMc(servicio) : null };
+}
+
+function obtenerProcedimientoColas() {
+    const servicios = leerDatosColas();
+    const resultados = servicios.map(servicio => ({ servicio, ...resolverColaMMc(servicio) }));
+    RESULTADOS.colas = resultados;
+    const unidadTiempo = servicio => escaparColaHtml(servicio.unidad || 'unidad de tiempo');
+    const formatoTiempo = (valor, unidad) => unidad === 'hora'
+        ? `${f3(valor)} ${unidad} (${f2(valor * 60)} min)`
+        : `${f3(valor)} ${unidad}`;
+    const porcentajeError = (simulado, exacto) => exacto === 0 ? 'No aplica (valor teórico 0)'
+        : `${f2(Math.abs(simulado - exacto) / Math.abs(exacto) * 100)}%`;
+    const filasResultado = (resultado) => {
+        const { servicio, estable, rho, manual, simulacion } = resultado;
+        const etiqueta = escaparColaHtml(servicio.nombre);
+        const unidad = unidadTiempo(servicio);
+        const encabezado = `<h4 style="color:#d32f2f;margin:18px 0 8px;">Servicio independiente: ${etiqueta}</h4>
+            <p><b>Datos leídos:</b> λ = ${f3(servicio.lambda)} clientes/${unidad}; μ = ${f3(servicio.mu)} clientes/${unidad}/servidor; c = ${servicio.servidores} servidor(es). Modelo M/M/${servicio.servidores}.</p>`;
+        const escenarioAdicional = resolverColaMMc({ ...servicio, servidores: servicio.servidores + 1 }, false);
+        const recomendacionCapacidad = !escenarioAdicional.estable
+            ? `Con un servidor adicional (c=${servicio.servidores + 1}) el sistema todavía sería inestable.`
+            : !estable
+                ? `Con un servidor adicional (c=${servicio.servidores + 1}) se estabiliza; Wq teórico = ${formatoTiempo(escenarioAdicional.manual.Wq, unidad)}.`
+                : `Con un servidor adicional (c=${servicio.servidores + 1}), Wq pasaría de ${formatoTiempo(manual.Wq, unidad)} a ${formatoTiempo(escenarioAdicional.manual.Wq, unidad)}: reducción teórica de ${manual.Wq === 0 ? 'no aplica' : `${f2(Math.max(0, (manual.Wq - escenarioAdicional.manual.Wq) / manual.Wq * 100))}%`}.`;
+        if (!estable) {
+            return `${encabezado}<p style="color:#b71c1c;"><b>Sistema inestable:</b> ρ = λ/(cμ) = ${f3(lambdaRho(servicio))} ≥ 1. La tasa de llegada ${f3(servicio.lambda)} es mayor o igual que la capacidad total ${f3(servicio.servidores * servicio.mu)}; las fórmulas estacionarias de Little no aplican y la cola crece sin límite.</p>
+                <p><b>Simulación finita (${simulacion ? '30,000' : '0'} llegadas):</b> Wq = ${formatoTiempo(simulacion.Wq, unidad)}; no representa un estado estable ni sustituye una propuesta de capacidad.</p>
+                <p><b>Escenario de mejora:</b> ${recomendacionCapacidad}</p>`;
+        }
+        const formulas = [
+            ['ρ', `λ/(cμ) = ${f3(servicio.lambda)}/(${servicio.servidores}·${f3(servicio.mu)})`, f3(rho)],
+            ['P₀', `1 / [Σ(aⁿ/n!, n=0..c−1) + aᶜ/(c!(1−ρ))]`, f3(manual.p0)],
+            ['Lq', `P₀·aᶜ·ρ / [c!(1−ρ)²]`, f3(manual.Lq)],
+            ['Wq', `Lq/λ = ${f3(manual.Lq)}/${f3(servicio.lambda)}`, formatoTiempo(manual.Wq, unidad)],
+            ['W', `Wq + 1/μ = ${f3(manual.Wq)} + 1/${f3(servicio.mu)}`, formatoTiempo(manual.W, unidad)],
+            ['L', `λW = ${f3(servicio.lambda)}·${f3(manual.W)}`, f3(manual.L)]
+        ];
+        const filas = formulas.map(([indicador, formula, valor]) =>
+            `<tr><td><b>${indicador}</b></td><td>${formula}</td><td>${valor}</td></tr>`).join('');
+        const simulacionFilas = [
+            ['Utilización ρ', f2(simulacion.rho * 100), f2(rho * 100), porcentajeError(simulacion.rho, rho)],
+            ['Sistema vacío P₀', f2(simulacion.p0 * 100), f2(manual.p0 * 100), porcentajeError(simulacion.p0, manual.p0)],
+            ['Camiones en cola Lq', f3(simulacion.Lq), f3(manual.Lq), porcentajeError(simulacion.Lq, manual.Lq)],
+            ['Espera en cola Wq', formatoTiempo(simulacion.Wq, unidad), formatoTiempo(manual.Wq, unidad), porcentajeError(simulacion.Wq, manual.Wq)],
+            ['Camiones en sistema L', f3(simulacion.L), f3(manual.L), porcentajeError(simulacion.L, manual.L)],
+            ['Tiempo en sistema W', formatoTiempo(simulacion.W, unidad), formatoTiempo(manual.W, unidad), porcentajeError(simulacion.W, manual.W)]
+        ].map(([indicador, sim, teoria, error]) =>
+            `<tr><td>${indicador}</td><td>${sim}</td><td>${teoria}</td><td>${error}</td></tr>`).join('');
+        return `${encabezado}<p><b>Estabilidad:</b> λ &lt; cμ → ${f3(servicio.lambda)} &lt; ${f3(servicio.servidores * servicio.mu)}. Sistema estable; a = λ/μ = ${f3(servicio.lambda)}/${f3(servicio.mu)} = ${f3(resultado.a)} y utilización por servidor ρ = ${f2(rho * 100)}%.</p>
+            <div style="overflow-x:auto;"><table class="excel-table"><tr><th>Indicador</th><th>Fórmula y sustitución</th><th>Cálculo teórico</th></tr>${filas}</table></div>
+            <p><b>Verificación de Little:</b> L = λW = ${f3(manual.L)}; Lq = λWq = ${f3(manual.Lq)}. Es válida al ser estable.</p>
+            <p><b>Manual vs simulador:</b> simulación de 30,000 llegadas con semilla fija para repetir los resultados; el error relativo compara la medición simulada con el valor teórico.</p>
+            <div style="overflow-x:auto;"><table class="excel-table"><tr><th>Indicador</th><th>Simulador</th><th>Fórmula manual</th><th>Diferencia relativa</th></tr>${simulacionFilas}</table></div>
+            <p><b>Escenario de mejora:</b> ${recomendacionCapacidad} Se supone un servidor adicional con la misma tasa μ; es una evaluación hipotética, no un dato del enunciado.</p>`;
+    };
+    const estables = resultados.filter(resultado => resultado.estable);
+    const unidadesComparables = new Set(estables.map(resultado => resultado.servicio.unidad || 'unidad de tiempo')).size <= 1;
+    const resumen = estables.length > 1 && unidadesComparables ? (() => {
+        const porEspera = [...estables].sort((a, b) => a.manual.Wq - b.manual.Wq);
+        const mejor = porEspera[0], prioridad = porEspera[porEspera.length - 1];
+        const reduccion = prioridad.manual.Wq === 0 ? 0
+            : (prioridad.manual.Wq - mejor.manual.Wq) / prioridad.manual.Wq * 100;
+        return `<div class="procedure-step" style="background:#e8f5e9;padding:14px;border-radius:8px;margin-top:16px;">
+            <b>Comparación por destino:</b> menor espera: ${escaparColaHtml(mejor.servicio.nombre)} (${formatoTiempo(mejor.manual.Wq, unidadTiempo(mejor.servicio))}); mayor espera y prioridad de revisión: ${escaparColaHtml(prioridad.servicio.nombre)} (${formatoTiempo(prioridad.manual.Wq, unidadTiempo(prioridad.servicio))}). Diferencia de espera entre ambos: ${f2(reduccion)}%.</div>`;
+    })() : (estables.length > 1
+        ? '<p><b>Comparación por destino:</b> no se ordenan los tiempos porque sus unidades no son iguales.</p>' : '');
+    const prioridad = estables.length > 1 && unidadesComparables
+        ? [...estables].sort((a, b) => b.manual.Wq - a.manual.Wq)[0]
+        : null;
+    const recomendaciones = resultados.map(resultado => {
+        const nombre = escaparColaHtml(resultado.servicio.nombre);
+        if (!resultado.estable) return `<li><b>${nombre}:</b> aumentar la capacidad de servicio o reducir/redistribuir llegadas antes de usar el sistema; actualmente es inestable.</li>`;
+        return `<li><b>${nombre}:</b> ${!unidadesComparables
+            ? 'monitorear su desempeño por separado; la unidad de tiempo difiere de otros servicios.'
+            : resultado === prioridad
+            ? `priorizar la revisión de capacidad o redistribución de llegadas; tiene la mayor espera teórica (${f3(resultado.manual.Wq)} ${unidadTiempo(resultado.servicio)}).`
+            : `mantener la capacidad actual y monitorear la espera simulada (${f3(resultado.simulacion.Wq)} ${unidadTiempo(resultado.servicio)}).`}</li>`;
+    }).join('');
+    return `${avisoFuente('colas')}
+        <div class="procedure-step"><h3 style="color:#d32f2f;">Modelo, fórmulas y datos</h3>
+        <p>Se analiza cada destino como una cola independiente M/M/c: llegadas Poisson, tiempos de servicio exponenciales y c servidores equivalentes. Las tasas λ y μ y el número de servidores se toman del enunciado; no se agregan tasas faltantes.</p>
+        ${graficarColasSVG(resultados)}
+        ${resultados.map(filasResultado).join('')}
+        ${resumen}
+        <div class="procedure-step" style="background:#fff3e0;padding:14px;border-radius:8px;margin-top:16px;"><b>Conclusiones y recomendaciones por servicio</b><ul>${recomendaciones}</ul></div></div>`;
+}
+
+function graficarColasSVG(resultados) {
+    const normalizarUnidad = unidad => String(unidad || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const minutosPorUnidad = { min: 1, minuto: 1, hora: 60, dia: 1440, semana: 10080 };
+    const unidades = resultados.map(resultado => normalizarUnidad(resultado.servicio.unidad));
+    const factores = unidades.map(unidad => minutosPorUnidad[unidad]);
+    const todasEnMinutos = factores.every(Number.isFinite);
+    const mismaUnidad = new Set(unidades).size === 1;
+    const graficarEspera = todasEnMinutos || mismaUnidad;
+    const convertirAMinutos = todasEnMinutos;
+    const ejeY = graficarEspera
+        ? (convertirAMinutos ? 'Tiempo promedio de espera (minutos)' : `Tiempo promedio de espera (${unidades[0]})`)
+        : 'Número promedio de clientes en cola (Lq)';
+    const series = resultados.map((resultado, indice) => {
+        if (!resultado.estable) return { teorico: null, simulado: null };
+        const factor = convertirAMinutos ? factores[indice] : 1;
+        const teorico = graficarEspera ? resultado.manual.Wq : resultado.manual.Lq;
+        const simulado = graficarEspera ? resultado.simulacion.Wq : resultado.simulacion.Lq;
+        return { teorico: teorico * factor, simulado: simulado * factor };
+    });
+    const valores = series.flatMap(serie => [serie.teorico, serie.simulado]).filter(Number.isFinite);
+    const maximo = Math.max(1, ...valores);
+    const maxNombre = Math.max(...resultados.map(resultado => String(resultado.servicio.nombre).length));
+    const anchoGrupo = Math.min(280, Math.max(170, maxNombre * 8));
+    const margenIzquierdo = 72, margenDerecho = 24, arriba = 48, abajo = 286;
+    const ancho = Math.max(600, margenIzquierdo + margenDerecho + anchoGrupo * resultados.length);
+    const alto = 380, altoGrafico = abajo - arriba;
+    const anchoBarra = Math.min(34, anchoGrupo * 0.23), separacionBarras = 8;
+    const lineas = Array.from({ length: 5 }, (_, indice) => {
+        const valor = maximo * indice / 4;
+        const y = abajo - altoGrafico * indice / 4;
+        return `<line x1="${margenIzquierdo}" y1="${y}" x2="${ancho - margenDerecho}" y2="${y}" stroke="#d9e0e7" />
+            <text x="${margenIzquierdo - 8}" y="${y + 4}" text-anchor="end" font-size="11" fill="#444">${f2(valor)}</text>`;
+    }).join('');
+    const dibujarBarra = (valor, x, color, etiqueta) => {
+        if (!Number.isFinite(valor)) return '';
+        const altura = altoGrafico * valor / maximo;
+        const y = abajo - altura;
+        return `<g><title>${escaparColaHtml(etiqueta)}: ${f2(valor)} ${graficarEspera ? (convertirAMinutos ? 'min' : unidades[0]) : 'clientes'}</title>
+            <rect x="${x}" y="${y}" width="${anchoBarra}" height="${altura}" rx="3" fill="${color}" />
+            <text x="${x + anchoBarra / 2}" y="${Math.max(arriba - 4, y - 5)}" text-anchor="middle" font-size="10" fill="#333">${f2(valor)}</text></g>`;
+    };
+    const barras = resultados.map((resultado, indice) => {
+        const centro = margenIzquierdo + anchoGrupo * (indice + 0.5);
+        const nombre = String(resultado.servicio.nombre);
+        const modelo = `M/M/${resultado.servicio.servidores}${resultado.estable ? '' : ' (inestable)'}`;
+        const nombreCorto = nombre.length > 30 ? `${nombre.slice(0, 27)}…` : nombre;
+        return `<g><title>${escaparColaHtml(`${nombre} — ${modelo}`)}</title>
+            ${dibujarBarra(series[indice].teorico, centro - anchoBarra - separacionBarras / 2, '#1976d2', `${nombre}, teórico`)}
+            ${dibujarBarra(series[indice].simulado, centro + separacionBarras / 2, '#f57c00', `${nombre}, simulación`)}
+            <text x="${centro}" y="310" text-anchor="middle" font-size="12" fill="#333">${escaparColaHtml(nombreCorto)}</text>
+            <text x="${centro}" y="329" text-anchor="middle" font-size="11" fill="#666">${escaparColaHtml(modelo)}</text></g>`;
+    }).join('');
+    const nota = !graficarEspera
+        ? 'Las unidades de tiempo no son comparables; se muestra Lq para no mezclar unidades.'
+        : resultados.some(resultado => !resultado.estable)
+            ? 'Los sistemas inestables se muestran sin valores estacionarios.'
+            : 'Azul: cálculo teórico. Naranja: simulación.';
+    const titulo = graficarEspera ? 'Espera promedio en cola (Wq)' : 'Clientes promedio en cola (Lq)';
+    return `<div class="procedure-step" style="margin:14px 0;">
+        <h4>Gráfico de resultados de colas</h4>
+        <p style="font-size:12px;color:#666;">${nota}</p>
+        <div style="overflow-x:auto;width:100%;">
+            <svg role="img" aria-label="${escaparColaHtml(`${titulo}. ${ejeY}`)}" viewBox="0 0 ${ancho} ${alto}" style="display:block;width:100%;min-width:${ancho}px;height:auto;">
+                <title>${escaparColaHtml(titulo)}</title>
+                <text x="${ancho / 2}" y="20" text-anchor="middle" font-size="14" font-weight="600" fill="#333">${escaparColaHtml(titulo)}</text>
+                <rect x="${margenIzquierdo}" y="31" width="12" height="12" fill="#1976d2" /><text x="${margenIzquierdo + 17}" y="42" font-size="11" fill="#333">Teórico</text>
+                <rect x="${margenIzquierdo + 100}" y="31" width="12" height="12" fill="#f57c00" /><text x="${margenIzquierdo + 117}" y="42" font-size="11" fill="#333">Simulación</text>
+                ${lineas}${barras}
+                <text transform="translate(17 ${arriba + altoGrafico / 2}) rotate(-90)" text-anchor="middle" font-size="11" fill="#333">${escaparColaHtml(ejeY)}</text>
+            </svg>
+        </div>
+    </div>`;
+}
+
+function lambdaRho(servicio) {
+    return servicio.lambda / (servicio.servidores * servicio.mu);
+}
+
+/* ==========================================================================
+   8. PERT / CPM (pasada hacia adelante y hacia atrás)
       Duraciones enteras se muestran enteras; si t_e = (o+4m+p)/6 es
       fraccionario se muestra como fracción exacta (ej. 16/3).
       Para forzar enteros: window.pertRedondear = true  (redondea t_e).
@@ -991,22 +1261,39 @@ function leerDatosPert() {
     const normaliza = (arr) => arr.map(a => ({ ...a, pred: (a.pred || []).map(String) }));
     const w = window.datosPert;
     const lista = Array.isArray(w) ? w : (w && Array.isArray(w.actividades) ? w.actividades : null);
-    if (lista && lista.length) { FUENTES.pert = 'window.datosPert'; return normaliza(lista); }
+    if (lista && lista.length) {
+        FUENTES.pert = 'window.datosPert';
+        return { actividades: normaliza(lista), plazo: Number.isFinite(w?.plazo) ? w.plazo : null };
+    }
     FUENTES.pert = 'SIN DATOS';
     throw new Error('No hay un modelo PERT/CPM extraído y completo.');
 }
 
-function resolverPert(actividades) {
+function probabilidadNormalEstandar(z) {
+    const x = Math.abs(z);
+    const t = 1 / (1 + 0.2316419 * x);
+    const densidad = 0.3989422804014327 * Math.exp(-x * x / 2);
+    const cola = densidad * t * (0.319381530 + t * (-0.356563782
+        + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+    return z >= 0 ? 1 - cola : cola;
+}
+
+function resolverPert(entrada) {
+    const actividades = Array.isArray(entrada) ? entrada : entrada.actividades;
+    const plazo = Array.isArray(entrada) ? null : entrada.plazo;
     const act = {};
     actividades.forEach(a => {
         const tres = a.o !== undefined && a.m !== undefined && a.p !== undefined;
         let te = tres ? (a.o + 4 * a.m + a.p) / 6 : num(a.dur, 0);
         te = limpio(te);
         if (window.pertRedondear) te = Math.round(te);
-        act[a.id] = { id: a.id, nombre: a.nombre, deriv: a.deriv, pred: [...(a.pred || [])], te, suc: [], tres, o: a.o, m: a.m, p: a.p, varianza: tres ? Math.pow((a.p - a.o) / 6, 2) : 0 };
+        act[a.id] = { id: a.id, nombre: a.nombre, deriv: a.deriv, pred: [...(a.pred || [])], te, dur: a.dur, suc: [], tres, o: a.o, m: a.m, p: a.p, varianza: tres ? Math.pow((a.p - a.o) / 6, 2) : 0 };
     });
     if (!Object.keys(act).length) return { error: 'No hay actividades para analizar.' };
-    Object.values(act).forEach(a => { a.pred = a.pred.filter(p => act[p]); });
+    const predecesoraInvalida = Object.values(act).find(a => a.pred.some(p => !act[p]));
+    if (predecesoraInvalida) {
+        return { error: `La actividad ${predecesoraInvalida.id} tiene una predecesora que no existe.` };
+    }
     Object.values(act).forEach(a => a.pred.forEach(p => act[p].suc.push(a.id)));
 
     const grado = {}; Object.values(act).forEach(a => grado[a.id] = a.pred.length);
@@ -1045,9 +1332,46 @@ function resolverPert(actividades) {
 
     const rutaCritica = orden.filter(k => act[k].critica);
     const hayTres = Object.values(act).some(a => a.tres);
-    const rc = rutas.find(rt => rt.critica);
-    const varRuta = hayTres && rc ? limpio(sumar(rc.cam.map(k => act[k].varianza))) : 0;
-    return { act, orden, duracion, rutaCritica, rutas, hayTres, varRuta };
+    let finRuta = orden.filter(k => !act[k].suc.length).sort((a, b) => act[b].FT - act[a].FT)[0];
+    const rutaCriticaPrincipal = [];
+    while (finRuta) {
+        rutaCriticaPrincipal.unshift(finRuta);
+        finRuta = act[finRuta].pred.length
+            ? [...act[finRuta].pred].sort((a, b) => act[b].FT - act[a].FT)[0]
+            : null;
+    }
+    const rutasTruncadas = rutas.length > 200;
+    const varRuta = hayTres ? limpio(sumar(rutaCriticaPrincipal.map(k => act[k].varianza))) : 0;
+    const hayDuracionCPM = actividades.every(a => Number.isFinite(a.dur));
+    let duracionCPM = null, rutaCriticaCPM = [], varianzaPlazo = null, desviacionPlazo = null, z = null, probabilidad = null;
+    if (hayDuracionCPM) {
+        const finTemprano = {}, mejorRutaCPM = {};
+        orden.forEach(k => {
+            const anterior = act[k].pred.length
+                ? [...act[k].pred].sort((a, b) => finTemprano[b] - finTemprano[a])[0]
+                : null;
+            finTemprano[k] = limpio((anterior ? finTemprano[anterior] : 0) + num(act[k].dur, 0));
+            mejorRutaCPM[k] = anterior ? [...mejorRutaCPM[anterior], k] : [k];
+        });
+        duracionCPM = limpio(Math.max(...Object.values(finTemprano)));
+        const terminalCPM = orden.filter(k => !act[k].suc.length)
+            .sort((a, b) => finTemprano[b] - finTemprano[a])[0];
+        rutaCriticaCPM = terminalCPM ? mejorRutaCPM[terminalCPM] : [];
+    }
+    const plazoEvaluado = Number.isFinite(plazo) ? plazo : duracionCPM;
+    if (hayTres && rutaCriticaPrincipal.length && Number.isFinite(plazoEvaluado)) {
+        varianzaPlazo = varRuta;
+        desviacionPlazo = Math.sqrt(varianzaPlazo);
+        if (desviacionPlazo > 0) {
+            z = (plazoEvaluado - duracion) / desviacionPlazo;
+            probabilidad = probabilidadNormalEstandar(z);
+        } else {
+            probabilidad = plazoEvaluado >= duracion ? 1 : 0;
+        }
+    }
+    return { act, orden, duracion, rutaCritica, rutas, rutaCriticaPrincipal, rutasTruncadas, hayTres, varRuta, hayDuracionCPM,
+        duracionCPM, rutaCriticaCPM, plazo: plazoEvaluado, plazoExplicito: Number.isFinite(plazo),
+        varianzaPlazo, desviacionPlazo, z, probabilidad };
 }
 
 function obtenerProcedimientoPertCpm() {
@@ -1105,7 +1429,18 @@ function obtenerProcedimientoPertCpm() {
     const filasRutas = r.rutas.map(rt => `<tr><td>${rt.cam.join(' ➔ ')}</td><td>${rt.cam.map(k => fmtT(r.act[k].te)).join(' + ')} = <b>${fmtT(rt.dur)}</b></td><td>${rt.critica ? '<span class="hl-result">Crítica (máxima)</span>' : 'No crítica'}</td></tr>`).join('');
 
     const rutasCrit = r.rutas.filter(rt => rt.critica);
-    const varHTML = r.hayTres ? `<li><b>Varianza de la ruta crítica:</b> σ² = ${rutasCrit[0].cam.map(k => fmtT(r.act[k].varianza)).join(' + ')} = ${fmtT(r.varRuta)}; σ = √${fmtT(r.varRuta)} = ${f2(Math.sqrt(r.varRuta))}</li>` : '';
+    const varHTML = r.hayTres ? `<li><b>Varianza de la ruta crítica PERT (${r.rutaCriticaPrincipal.join(' ➔ ')}):</b> σ² = ${r.rutaCriticaPrincipal.map(k => fmtT(r.act[k].varianza)).join(' + ')} = ${fmtT(r.varRuta)}; σ = √${fmtT(r.varRuta)} = ${f2(Math.sqrt(r.varRuta))}${rutasCrit.length > 1 ? ' (aproximación por una de las rutas críticas; hay rutas simultáneamente críticas).' : ''}</li>` : '';
+    const avisoRutas = r.rutasTruncadas ? '<p><small>La tabla muestra hasta 201 rutas para mantener el reporte legible; la ruta crítica y su varianza se calculan directamente sobre la red completa.</small></p>' : '';
+    const probabilidadHTML = r.probabilidad === null ? ''
+        : `<li><b>Probabilidad de terminar a más tardar en ${fmtT(r.plazo)} días:</b> Z = (plazo − T<sub>E</sub>)/σ = (${fmtT(r.plazo)} − ${fmtT(r.duracion)})/${f2(r.desviacionPlazo)} = ${r.z === null ? 'no aplica (σ = 0)' : f2(r.z)}; P(T ≤ plazo) = <b>${f2(r.probabilidad * 100)}%</b>${r.plazoExplicito ? ' (plazo tomado del enunciado)' : ' (se usa como plazo de referencia la duración CPM)'}</li>`;
+    const comparacionCPM = r.hayDuracionCPM
+        ? `<li><b>Comparación CPM vs PERT:</b> duración determinista CPM = ${fmtT(r.duracionCPM)} días, ruta ${r.rutaCriticaCPM.join(' ➔ ')}; tiempo esperado PERT = ${fmtT(r.duracion)} días, ruta ${rutasCrit.map(rt => rt.cam.join(' ➔ ')).join(' | ')}; diferencia = ${fmtT(Math.abs(r.duracionCPM - r.duracion))} días (${f2(r.duracionCPM === 0 ? 0 : Math.abs(r.duracionCPM - r.duracion) / r.duracionCPM * 100)}%). CPM usa las duraciones deterministas del enunciado; PERT usa t<sub>e</sub> = (o + 4m + p)/6.</li>`
+        : '';
+    const recomendacionPert = r.probabilidad === null
+        ? 'Completar las tres estimaciones por actividad y especificar el plazo objetivo para calcular la probabilidad de cumplimiento.'
+        : (r.probabilidad >= 0.99
+            ? 'La probabilidad estimada supera 99% para el plazo evaluado; monitorear las actividades críticas y conservar el plazo como referencia.'
+            : 'La probabilidad estimada no alcanza 99% para el plazo evaluado; revisar las actividades críticas y considerar reducir duraciones o ampliar el plazo.');
 
     // Tabla de actividades (cuando traen nombre / derivación)
     let tablaActs = '';
@@ -1159,9 +1494,13 @@ function obtenerProcedimientoPertCpm() {
             <h3 style="color:#c62828; margin-bottom:8px; font-size:15px;">🏁 CONCLUSIÓN PERT / CPM</h3>
             <ul style="margin-left:20px; line-height:1.8;">
                 <li><b>Duración Total del Proyecto:</b> <span class="hl-final">${fmtT(r.duracion)} días</span>.</li>
-                <li><b>Ruta Crítica (H = 0):</b> <span class="hl-result">${rutasCrit.map(rt => rt.cam.join(' ➔ ')).join('  |  ')}</span>.</li>
+                <li><b>Ruta Crítica PERT (H = 0):</b> <span class="hl-result">${r.rutaCriticaPrincipal.join(' ➔ ')}</span>.</li>
+                ${comparacionCPM}
                 ${varHTML}
+                ${probabilidadHTML}
+                <li><b>Recomendación:</b> ${recomendacionPert}</li>
             </ul>
+            ${avisoRutas}
         </div>
         <div>
             <h4 style="color:#d32f2f; font-size:14px;">🕸️ Diagrama de Red AON:</h4>
