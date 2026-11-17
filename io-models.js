@@ -1068,6 +1068,24 @@ function simularColaMMc(servicio, cantidad = 30000) {
 
 function resolverColaMMc(servicio, incluirSimulacion = true) {
     const { lambda, mu, servidores: c } = servicio;
+    if (!Number.isFinite(lambda) || lambda < 0) {
+        return { estable: false, error: 'La tasa de llegadas λ no puede ser negativa o no numérica.' };
+    }
+    if (!Number.isFinite(mu) || mu <= 0) {
+        return { estable: false, error: 'La tasa de servicio μ debe ser mayor que cero.' };
+    }
+    if (!Number.isInteger(c) || c < 1) {
+        return { estable: false, error: 'El número de servidores c debe ser un entero mayor que cero.' };
+    }
+    if (lambda === 0) {
+        return {
+            estable: true,
+            rho: 0,
+            a: 0,
+            manual: { rho: 0, p0: 1, Lq: 0, Wq: 0, W: 1 / mu, L: 0 },
+            simulacion: null
+        };
+    }
     const a = lambda / mu;
     const rho = lambda / (c * mu);
     if (lambda >= c * mu) {
@@ -1249,6 +1267,184 @@ function graficarColasSVG(resultados) {
 
 function lambdaRho(servicio) {
     return servicio.lambda / (servicio.servidores * servicio.mu);
+}
+
+/* ==========================================================================
+   7.1. MÓDULO M/M/1 Y M/M/2 DESDE LA INTERFAZ
+   Soporta entradas manuales, λ = 0 y validación de estabilidad.
+   ========================================================================== */
+
+function calcularModeloMM(lambda, mu, servidores) {
+    const c = servidores;
+    const rho = lambda === 0 ? 0 : lambda / (c * mu);
+    if (lambda < 0) return { estable: false, error: 'La tasa de llegadas λ no puede ser negativa.' };
+    if (mu <= 0) return { estable: false, error: 'La tasa de servicio μ debe ser mayor que cero.' };
+    if (lambda === 0) {
+        return {
+            estable: true,
+            rho,
+            p0: 1,
+            L: 0,
+            Lq: 0,
+            W: 1 / mu,
+            Wq: 0,
+            a: 0
+        };
+    }
+    if (lambda >= c * mu) {
+        return {
+            estable: false,
+            rho,
+            error: `Sistema inestable: λ (${lambda}) debe ser menor que cμ (${c * mu}).`
+        };
+    }
+    if (c === 1) {
+        const p0 = 1 - rho;
+        const L = lambda / (mu - lambda);
+        const Lq = lambda * lambda / (mu * (mu - lambda));
+        const W = 1 / (mu - lambda);
+        const Wq = lambda / (mu * (mu - lambda));
+        return { estable: true, rho, p0, L, Lq, W, Wq, a: lambda / mu };
+    }
+    const a = lambda / mu;
+    const p0 = 1 / (1 + a + (a * a / (2 * (1 - rho))));
+    const Lq = p0 * a * a * rho / (2 * (1 - rho) * (1 - rho));
+    const Wq = Lq / lambda;
+    const W = Wq + 1 / mu;
+    const L = lambda * W;
+    return { estable: true, rho, p0, L, Lq, W, Wq, a };
+}
+
+function aplicarPresetColas() {
+    const preset = document.getElementById('colasPreset')?.value;
+    const lambda = document.getElementById('colasLambda');
+    const mu = document.getElementById('colasMu');
+    const nombre = document.getElementById('colasNombre');
+    const modelo = document.getElementById('colasModelo');
+    if (!preset || !lambda || !mu || !nombre || !modelo) return;
+
+    if (preset === 'pesada') {
+        lambda.value = '2';
+        mu.value = '3';
+        nombre.value = 'Flota pesada / ruta foránea';
+        modelo.value = '1';
+    } else if (preset === 'supermercado') {
+        lambda.value = '4';
+        mu.value = '6';
+        nombre.value = 'Descarga en supermercados';
+        modelo.value = '1';
+    } else {
+        lambda.value = '3';
+        mu.value = '5';
+        nombre.value = 'CEDI - carga de camiones';
+        modelo.value = 'ambos';
+    }
+}
+
+function calcularModuloColasEntrada() {
+    const lambda = Number(document.getElementById('colasLambda')?.value);
+    const mu = Number(document.getElementById('colasMu')?.value);
+    const unidad = document.getElementById('colasUnidad')?.value || 'hora';
+    const modelo = document.getElementById('colasModelo')?.value || 'ambos';
+    const nombre = (document.getElementById('colasNombre')?.value || 'Escenario de colas').trim();
+    const destino = document.getElementById('colasResultado');
+    if (!destino) return;
+
+    if (!Number.isFinite(lambda) || !Number.isFinite(mu)) {
+        destino.innerHTML = '<p style="color:#b71c1c;"><b>Entrada inválida:</b> λ y μ deben ser números.</p>';
+        return;
+    }
+    if (lambda < 0) {
+        destino.innerHTML = '<p style="color:#b71c1c;"><b>Entrada inválida:</b> λ no puede ser negativa.</p>';
+        return;
+    }
+    if (mu <= 0) {
+        destino.innerHTML = '<p style="color:#b71c1c;"><b>Entrada inválida:</b> μ debe ser mayor que cero.</p>';
+        return;
+    }
+
+    const mm1 = calcularModeloMM(lambda, mu, 1);
+    const mm2 = calcularModeloMM(lambda, mu, 2);
+    const factorMinutos = unidad === 'hora' ? 60 : unidad === 'día' ? 1440 : 1;
+    const unidadPlural = unidad === 'día' ? 'días' : `${unidad}s`;
+    const tiempo = (valor, digitos = 4) => {
+        if (!Number.isFinite(valor)) return 'No aplica';
+        if (unidad === 'hora') {
+            return `${valor.toFixed(digitos)} h / ${(valor * 60).toFixed(2)} min`;
+        }
+        return `${valor.toFixed(digitos)} ${unidadPlural}`;
+    };
+    const fila = (indicador, ...valores) =>
+        `<tr><td>${indicador}</td>${valores.map(valor => `<td>${valor}</td>`).join('')}</tr>`;
+    const valor = n => Number.isFinite(n) ? n.toFixed(4) : 'No aplica';
+
+    let contenido = `<h4>Escenario: ${escaparColaHtml(nombre)}</h4>
+        <p><b>Datos:</b> λ = ${lambda} camiones/${unidad}; μ = ${mu} camiones/${unidad}/servidor.</p>
+        <p><b>Hipótesis:</b> llegadas Poisson, servicio exponencial, FIFO, servidores homogéneos, capacidad suficiente y régimen estacionario.</p>`;
+
+    if (modelo === '1' || modelo === 'ambos') {
+        contenido += mm1.estable
+            ? `<h4>M/M/1 — situación actual</h4>
+                <p><b>Estabilidad:</b> λ &lt; μ → ${lambda} &lt; ${mu}. Sistema estable.</p>
+                <table class="excel-table">
+                <tr><th>Indicador</th><th>Operación visible</th><th>Resultado</th></tr>
+                ${fila('ρ', `λ/μ = ${lambda}/${mu}`, `${valor(mm1.rho)} (${(mm1.rho * 100).toFixed(2)}%)`)}
+                ${fila('P₀', `1 − ρ = 1 − ${mm1.rho.toFixed(4)}`, valor(mm1.p0))}
+                ${fila('L', `λ/(μ−λ) = ${lambda}/(${mu}−${lambda})`, valor(mm1.L))}
+                ${fila('Lq', `λ²/[μ(μ−λ)] = ${lambda}²/[${mu}(${mu}−${lambda})]`, valor(mm1.Lq))}
+                ${fila('W', `1/(μ−λ) = 1/(${mu}−${lambda})`, tiempo(mm1.W))}
+                ${fila('Wq', `λ/[μ(μ−λ)] = ${lambda}/[${mu}(${mu}−${lambda})]`, tiempo(mm1.Wq))}
+                </table>
+                <p><b>Verificación de Little:</b> λW = ${lambda}×${mm1.W.toFixed(6)} = ${mm1.L.toFixed(6)} = L; λWq = ${lambda}×${mm1.Wq.toFixed(6)} = ${mm1.Lq.toFixed(6)} = Lq.</p>`
+            : `<p style="color:#b71c1c;"><b>M/M/1 inestable:</b> ${mm1.error}</p>`;
+    }
+
+    if (modelo === '2' || modelo === 'ambos') {
+        contenido += mm2.estable
+            ? `<h4>M/M/2 — propuesta de mejora</h4>
+                <p><b>Estabilidad:</b> λ &lt; 2μ → ${lambda} &lt; ${2 * mu}. Sistema estable.</p>
+                <p><b>a = λ/μ = ${mm2.a.toFixed(4)}</b>; ρ = λ/(2μ) = ${lambda}/(${2 * mu}) = ${(mm2.rho * 100).toFixed(2)}%.</p>
+                <table class="excel-table">
+                <tr><th>Indicador</th><th>Operación visible</th><th>Resultado</th></tr>
+                ${fila('P₀', `1/[1+a+a²/(2(1−ρ))]`, valor(mm2.p0))}
+                ${fila('Lq', `P₀a²ρ/[2(1−ρ)²]`, valor(mm2.Lq))}
+                ${fila('Wq', `Lq/λ = ${mm2.Lq.toFixed(6)}/${lambda}`, tiempo(mm2.Wq))}
+                ${fila('W', `Wq+1/μ = ${mm2.Wq.toFixed(6)}+1/${mu}`, tiempo(mm2.W))}
+                ${fila('L', `λW = ${lambda}×${mm2.W.toFixed(6)}`, valor(mm2.L))}
+                </table>
+                <p><b>Verificación de Little:</b> λWq = ${lambda}×${mm2.Wq.toFixed(6)} = ${mm2.Lq.toFixed(6)} = Lq; λW = ${lambda}×${mm2.W.toFixed(6)} = ${mm2.L.toFixed(6)} = L.</p>`
+            : `<p style="color:#b71c1c;"><b>M/M/2 inestable:</b> ${mm2.error}</p>`;
+    }
+
+    if (modelo === 'ambos' && mm1.estable && mm2.estable) {
+        const reduccion = mm1.Wq - mm2.Wq;
+        const porcentaje = mm1.Wq === 0 ? 0 : reduccion / mm1.Wq * 100;
+        contenido += `<h4>Comparación gerencial</h4>
+            <table class="excel-table">
+            <tr><th>Indicador</th><th>M/M/1</th><th>M/M/2</th><th>Impacto</th></tr>
+            ${fila('Servidores', '1', '2', '+1 plataforma')}
+            ${fila('Utilización', `${(mm1.rho * 100).toFixed(2)}%`, `${(mm2.rho * 100).toFixed(2)}% por servidor`, 'Carga repartida')}
+            ${fila('P₀', `${(mm1.p0 * 100).toFixed(2)}%`, `${(mm2.p0 * 100).toFixed(2)}%`, `${((mm2.p0 - mm1.p0) * 100).toFixed(2)} puntos porcentuales`)}
+            ${fila('Wq', tiempo(mm1.Wq), tiempo(mm2.Wq), `Reduce ${reduccion.toFixed(6)} ${unidadPlural} (${porcentaje.toFixed(2)}%)`)}
+            ${fila('Lq', valor(mm1.Lq), valor(mm2.Lq), `Reduce ${Math.max(0, mm1.Lq - mm2.Lq).toFixed(4)} camiones`)}
+            ${fila('W', tiempo(mm1.W), tiempo(mm2.W), `Reduce ${Math.max(0, mm1.W - mm2.W).toFixed(6)} ${unidadPlural}`)}
+            ${fila('L', valor(mm1.L), valor(mm2.L), `Reduce ${Math.max(0, mm1.L - mm2.L).toFixed(4)} camiones`)}
+            </table>
+            <p><b>Análisis gerencial:</b> la segunda plataforma reduce la espera, pero la inversión requiere comparar costos de personal, infraestructura y mantenimiento con los ahorros por menor demora. Sin datos de costo no puede afirmarse rentabilidad.</p>`;
+    }
+
+    if (lambda === 3 && mu === 5 && unidad === 'hora' && mm1.estable && mm2.estable) {
+        contenido += `<div style="background:#e8f5e9;padding:12px;border-radius:8px;">
+            <b>Coincidencia con el Word:</b> M/M/1: ρ=60%, P₀=40%, L=1.5, Lq=0.9, W=30 min, Wq=18 min.
+            M/M/2: ρ=30%, P₀≈53.85%, Lq≈0.0593, Wq≈1.19 min, L≈0.6593, W≈13.19 min.
+            Reducción de Wq≈93.4%.
+            </div>`;
+    }
+
+    destino.innerHTML = contenido;
+    if (typeof mostrarNotificacion === 'function') {
+        mostrarNotificacion('Cálculo de teoría de colas completado.');
+    }
 }
 
 /* ==========================================================================
