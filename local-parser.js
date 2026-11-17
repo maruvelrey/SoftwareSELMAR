@@ -176,7 +176,26 @@ function extraerColasLocal(texto) {
         const nombreMatch = [...contextoPrevio.matchAll(/\b(?:tienda|sucursal|destino|supermercado|cedi)\s+(?:de\s+)?([^,;:\n.]{1,45})/gi)].pop();
         const modelos = [...contextoPrevio.matchAll(/\bm\s*\/\s*m\s*\/\s*(\d+)\b/gi)];
         const servidores = [...contexto.matchAll(/(?:\b(?:servidores?|estaciones?|bah[ií]as?|plataformas?)\s*(?:=|:|de|son)?\s*(\d+)\b|(\d+)\s*(?:servidores?|estaciones?|bah[ií]as?|plataformas?)\b|\bc\s*=\s*(\d+)\b)/gi)];
-        const nombre = nombreMatch ? nombreMatch[0].trim() : `Servicio ${serviciosCola.length + 1}`;
+        const contextoCercano = texto.slice(Math.max(0, marca.index - 220), marca.index);
+        const etiquetasEscenario = [
+            ...contextoCercano.matchAll(/\bsituaci[oó]n\s+actual\b|\bactual\s*\(/gi)
+        ].map(match => ({ indice: match.index, tipo: 'actual' }))
+            .concat([
+                ...contextoCercano.matchAll(/\bpropuesta\s+(?:de\s+)?mejora\b|\bpropuesta\s*\(/gi)
+            ].map(match => ({ indice: match.index, tipo: 'propuesta' })))
+            .sort((a, b) => b.indice - a.indice);
+        const etiquetaCercana = etiquetasEscenario[0];
+        const situacionActual = etiquetaCercana?.tipo === 'actual'
+            || (!etiquetaCercana && /\bm\s*\/\s*m\s*\/\s*1\b/i.test(contextoCercano));
+        const propuestaMejora = etiquetaCercana?.tipo === 'propuesta'
+            || (!etiquetaCercana && /\bm\s*\/\s*m\s*\/\s*2\b/i.test(contextoCercano));
+        const nombre = propuestaMejora
+            ? 'Propuesta de mejora'
+            : situacionActual
+                ? 'Situación actual'
+                : nombreMatch
+                    ? nombreMatch[0].trim()
+                    : `Servicio ${serviciosCola.length + 1}`;
         const marcaServidor = servidores[servidores.length - 1];
         const c = marcaServidor
             ? Number(marcaServidor[1] || marcaServidor[2] || marcaServidor[3])

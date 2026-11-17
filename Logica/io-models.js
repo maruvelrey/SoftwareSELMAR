@@ -18,6 +18,7 @@ const sumar = (arr) => arr.reduce((a, b) => a + b, 0);
 const num = (v, def) => { const x = parseFloat(v); return Number.isFinite(x) ? x : def; };
 const f2 = (n) => Number(n).toLocaleString('es-GT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const f3 = (n) => String(Number(Number(n).toFixed(3)));
+const f4 = (n) => Number(n).toLocaleString('es-GT', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
 const limpio = (x) => Math.round(Number(x) * 1e9) / 1e9;
 
 /* Tiempos (PERT): enteros sin decimales; si el valor es fraccionario exacto se muestra como fracción (p. ej. 16/3) */
@@ -1093,7 +1094,7 @@ function obtenerProcedimientoColas() {
     RESULTADOS.colas = resultados;
     const unidadTiempo = servicio => escaparColaHtml(servicio.unidad || 'unidad de tiempo');
     const formatoTiempo = (valor, unidad) => unidad === 'hora'
-        ? `${f3(valor)} ${unidad} (${f2(valor * 60)} min)`
+        ? `${f4(valor)} ${unidad} (${f2(valor * 60)} min)`
         : `${f3(valor)} ${unidad}`;
     const porcentajeError = (simulado, exacto) => exacto === 0 ? 'No aplica (valor teórico 0)'
         : `${f2(Math.abs(simulado - exacto) / Math.abs(exacto) * 100)}%`;
@@ -1116,20 +1117,20 @@ function obtenerProcedimientoColas() {
         }
         const formulas = [
             ['ρ', `λ/(cμ) = ${f3(servicio.lambda)}/(${servicio.servidores}·${f3(servicio.mu)})`, f3(rho)],
-            ['P₀', `1 / [Σ(aⁿ/n!, n=0..c−1) + aᶜ/(c!(1−ρ))]`, f3(manual.p0)],
-            ['Lq', `P₀·aᶜ·ρ / [c!(1−ρ)²]`, f3(manual.Lq)],
+            ['P₀', `1 / [Σ(aⁿ/n!, n=0..c−1) + aᶜ/(c!(1−ρ))]`, f4(manual.p0)],
+            ['Lq', `P₀·aᶜ·ρ / [c!(1−ρ)²]`, f4(manual.Lq)],
             ['Wq', `Lq/λ = ${f3(manual.Lq)}/${f3(servicio.lambda)}`, formatoTiempo(manual.Wq, unidad)],
-            ['W', `Wq + 1/μ = ${f3(manual.Wq)} + 1/${f3(servicio.mu)}`, formatoTiempo(manual.W, unidad)],
-            ['L', `λW = ${f3(servicio.lambda)}·${f3(manual.W)}`, f3(manual.L)]
+            ['W', `Wq + 1/μ = ${f4(manual.Wq)} + 1/${f3(servicio.mu)}`, formatoTiempo(manual.W, unidad)],
+            ['L', `λW = ${f3(servicio.lambda)}·${f4(manual.W)}`, f4(manual.L)]
         ];
         const filas = formulas.map(([indicador, formula, valor]) =>
             `<tr><td><b>${indicador}</b></td><td>${formula}</td><td>${valor}</td></tr>`).join('');
         const simulacionFilas = [
             ['Utilización ρ', f2(simulacion.rho * 100), f2(rho * 100), porcentajeError(simulacion.rho, rho)],
             ['Sistema vacío P₀', f2(simulacion.p0 * 100), f2(manual.p0 * 100), porcentajeError(simulacion.p0, manual.p0)],
-            ['Camiones en cola Lq', f3(simulacion.Lq), f3(manual.Lq), porcentajeError(simulacion.Lq, manual.Lq)],
+            ['Camiones en cola Lq', f4(simulacion.Lq), f4(manual.Lq), porcentajeError(simulacion.Lq, manual.Lq)],
             ['Espera en cola Wq', formatoTiempo(simulacion.Wq, unidad), formatoTiempo(manual.Wq, unidad), porcentajeError(simulacion.Wq, manual.Wq)],
-            ['Camiones en sistema L', f3(simulacion.L), f3(manual.L), porcentajeError(simulacion.L, manual.L)],
+            ['Camiones en sistema L', f4(simulacion.L), f4(manual.L), porcentajeError(simulacion.L, manual.L)],
             ['Tiempo en sistema W', formatoTiempo(simulacion.W, unidad), formatoTiempo(manual.W, unidad), porcentajeError(simulacion.W, manual.W)]
         ].map(([indicador, sim, teoria, error]) =>
             `<tr><td>${indicador}</td><td>${sim}</td><td>${teoria}</td><td>${error}</td></tr>`).join('');
